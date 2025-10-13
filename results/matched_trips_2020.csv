@@ -1,0 +1,1 @@
+tripduration,starttime,stoptime,start_station_id,start station name,start station latitude,start station longitude,end_station_id,end station name,end station latitude,end station longitude,bike_id,usertype,birth year,gender,crash_match_type,matched_crash_id,dist_to_crash_start_m,dist_to_crash_end_m
