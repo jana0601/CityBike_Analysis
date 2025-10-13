@@ -2,10 +2,15 @@ import pandas as pd
 import folium
 from folium.plugins import MarkerCluster
 from pathlib import Path
-import pandas as pd
-import os
+import os  
+from datetime import timedelta
+from pandas import Timedelta
+from haversine import haversine, Unit
+import gc
 
-def merge_usage_with_matched_crashes(year):
+
+# Merge usage count and matched event count for certain keys
+def merge_usage_with_matched_crashes(year):    
     usage_file = f"..//results//dataAnalysis//{year}//bike_usage_per_month.csv"
     matched_crash_file = f"..//results//matched_trips//matched_trips_{year}.csv"
     output_file = f"..//results//dataAnalysis//{year}//monthly_usage_with_crashes.csv"
@@ -163,14 +168,8 @@ def create_crash_map(df, lat_col, lon_col, datetime_col, id_col, output_file):
     
     
     
-import pandas as pd
-from datetime import timedelta
-from haversine import haversine, Unit
-from pandas import Timedelta
-from pathlib import Path
-import os
-import gc  # garbage collector
 
+# Match bike involved trips from NYPD to bike trips data from CityBike
 def match_crashes_to_trips(
     trip_data_folder,
     crash_file,
@@ -291,9 +290,7 @@ def match_crashes_to_trips(
         gc.collect()
 
         
-import os
-import pandas as pd
-
+# Merge all matched crash to one file
 def merge_all_matched_crash_data(base_dir, output_dir):
    
     crash_files = [f for f in os.listdir(base_dir) if f.startswith("matched_trips_") and f.endswith(".csv")]
@@ -320,14 +317,8 @@ def merge_all_matched_crash_data(base_dir, output_dir):
     print(combined_crashes.head())
 
 
-    
-import pandas as pd
-from datetime import timedelta
-from pandas import Timedelta
-from pathlib import Path
-from haversine import haversine, Unit
-import gc
 
+# A slightly faster matching method
 def match_crashes_to_trips_faster(
     trip_data_folder,
     crash_file,
@@ -465,304 +456,3 @@ def match_crashes_to_trips_faster(
         gc.collect()
         
         
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import timedelta
-from haversine import Unit
-from sklearn.neighbors import BallTree  # pip install scikit-learn
-import gc
-
-def deg_to_rad(degrees):
-    return np.deg2rad(degrees)
-
-def match_crashes_to_trips_fastest(
-    trip_data_folder,
-    crash_file,
-    results_folder,
-    max_time_diff=1,         # in minutes
-    max_distance_m=100,      # meters
-    start_year=2015,
-    end_year=2025
-):
-    # Load crash data once
-    crash_df = pd.read_csv(crash_file)
-    crash_df = crash_df[['COLLISION_ID', 'CRASH_DATETIME', 'LATITUDE', 'LONGITUDE']].dropna()
-    crash_df['CRASH_DATETIME'] = pd.to_datetime(crash_df['CRASH_DATETIME'], errors='coerce')
-
-    results_folder = Path(results_folder)
-    results_folder.mkdir(parents=True, exist_ok=True)
-
-    earth_radius_m = 6371000  # mean Earth radius in meters
-
-    for year in range(start_year, end_year + 1):
-        trip_file = Path(trip_data_folder) / f"{year}_merged.csv"
-        if not trip_file.exists():
-            print(f"❌ File not found: {trip_file}")
-            continue
-
-        print(f"\n📦 Processing trips for year: {year}")
-        trip_df = pd.read_csv(trip_file)
-        trip_df['starttime'] = pd.to_datetime(trip_df['starttime'], errors='coerce')
-        trip_df['stoptime'] = pd.to_datetime(trip_df['stoptime'], errors='coerce')
-
-        # Keep only rows with valid start station lat/lon
-        trip_starts = trip_df.dropna(subset=['start station latitude', 'start station longitude']).copy()
-
-        # Convert lat/lon to radians for BallTree haversine metric
-        coords = np.vstack((
-            deg_to_rad(trip_starts['start station latitude'].values),
-            deg_to_rad(trip_starts['start station longitude'].values)
-        )).T
-
-        # Build BallTree (haversine metric expects coords in radians)
-        tree = BallTree(coords, metric='haversine')
-
-        # Max distance in radians on Earth's surface
-        max_distance_rad = max_distance_m / earth_radius_m
-
-        matched_trip_info = []
-
-        # Narrow crash records to time bounds (optional speed-up)
-        earliest_trip_time = trip_df['starttime'].min()
-        latest_trip_time = trip_df['starttime'].max()
-        time_window_start = earliest_trip_time - timedelta(minutes=2)
-        time_window_end = latest_trip_time + timedelta(minutes=2)
-        crash_df_chunk = crash_df[
-            (crash_df['CRASH_DATETIME'] >= time_window_start) &
-            (crash_df['CRASH_DATETIME'] <= time_window_end)
-        ].copy()
-        print(f"🚨 {len(crash_df_chunk)} crash records within trip time range.")
-
-        for _, crash_row in crash_df_chunk.iterrows():
-            crash_lat_rad = deg_to_rad(crash_row['LATITUDE'])
-            crash_lng_rad = deg_to_rad(crash_row['LONGITUDE'])
-            crash_dt = crash_row['CRASH_DATETIME']
-            crash_id = crash_row['COLLISION_ID']
-
-            # Time window for matching trips
-            window_start = crash_dt - timedelta(minutes=max_time_diff)
-            window_end = crash_dt + timedelta(minutes=max_time_diff)
-
-            # Filter trips by time window (vectorized)
-            mask_time = (
-                ((trip_starts['starttime'] >= window_start) & (trip_starts['starttime'] <= window_end)) |
-                ((trip_starts['stoptime'] >= window_start) & (trip_starts['stoptime'] <= window_end))
-            )
-            if not mask_time.any():
-                continue  # no candidate trips in time window
-
-            candidate_coords = coords[mask_time.values]
-
-            # Query BallTree for nearby trips (within max_distance_rad)
-            if candidate_coords.shape[0] == 0:
-                continue
-
-            indices = tree.query_radius([[crash_lat_rad, crash_lng_rad]], r=max_distance_rad)[0]
-
-            # Filter these indices to those within the time window mask
-            # tree was built on all trip_starts, but we want only those filtered by time window
-            # So intersect indices with time window mask indices
-
-            # Get original indices in trip_starts for time window mask
-            time_window_indices = np.where(mask_time.values)[0]
-
-            # Intersect with indices from BallTree
-            filtered_indices = np.intersect1d(indices, time_window_indices)
-
-            for idx in filtered_indices:
-                trip_idx = trip_starts.index[idx]
-                trip_row = trip_starts.loc[trip_idx]
-
-                # Compute exact haversine distance (meters)
-                dist_start = haversine(
-                    (trip_row['start station latitude'], trip_row['start station longitude']),
-                    (crash_row['LATITUDE'], crash_row['LONGITUDE']),
-                    unit=Unit.METERS
-                )
-
-                if dist_start <= max_distance_m:
-                    matched_trip_info.append({
-                        'trip_idx': trip_idx,
-                        'crash_id': crash_id,
-                        'match_type': 'start',
-                        'dist_start_m': dist_start,
-                        'CRASH_LATITUDE': crash_row['LATITUDE'],
-                        'CRASH_LONGITUDE': crash_row['LONGITUDE'],
-                        'CRASH_DATETIME': crash_dt
-                    })
-
-        # Initialize columns for matches
-        trip_df['crash_match_type'] = None
-        trip_df['matched_crash_id'] = None
-        trip_df['dist_to_crash_start_m'] = None
-        trip_df['CRASH_LATITUDE'] = None
-        trip_df['CRASH_LONGITUDE'] = None
-        trip_df['CRASH_DATETIME'] = None
-
-        matched_df = pd.DataFrame(matched_trip_info)
-        for _, row in matched_df.iterrows():
-            trip_df.at[row['trip_idx'], 'crash_match_type'] = row['match_type']
-            trip_df.at[row['trip_idx'], 'matched_crash_id'] = row['crash_id']
-            trip_df.at[row['trip_idx'], 'dist_to_crash_start_m'] = row['dist_start_m']
-            trip_df.at[row['trip_idx'], 'CRASH_LATITUDE'] = row['CRASH_LATITUDE']
-            trip_df.at[row['trip_idx'], 'CRASH_LONGITUDE'] = row['CRASH_LONGITUDE']
-            trip_df.at[row['trip_idx'], 'CRASH_DATETIME'] = row['CRASH_DATETIME']
-
-        matched_trips_df = trip_df[trip_df['matched_crash_id'].notna()].copy()
-        print(f"✅ Matched trips found: {len(matched_trips_df)}")
-
-        output_file = results_folder / f"matched_trips_{year}.csv"
-        matched_trips_df.to_csv(output_file, index=False)
-        print(f"💾 Saved to: {output_file}")
-
-        # Free memory
-        del trip_df, trip_starts, matched_trip_info, matched_df, matched_trips_df, crash_df_chunk
-        gc.collect()
-
-
-
-        
-        
-from sklearn.neighbors import BallTree
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import timedelta
-import gc
-from haversine import haversine, Unit
-
-def match_crashes_to_trips_optimized(
-    trip_data_folder,
-    crash_file,
-    results_folder,
-    max_time_diff=1,
-    max_distance_m=100,
-    start_year=2015,
-    end_year=2025
-):
-    crash_df = pd.read_csv(crash_file)
-    crash_df = crash_df[['COLLISION_ID', 'CRASH_DATETIME', 'LATITUDE', 'LONGITUDE']].dropna()
-    crash_df['CRASH_DATETIME'] = pd.to_datetime(crash_df['CRASH_DATETIME'], errors='coerce')
-
-    results_folder = Path(results_folder)
-    results_folder.mkdir(parents=True, exist_ok=True)
-
-    EARTH_RADIUS_M = 6371000
-    max_distance_rad = max_distance_m / EARTH_RADIUS_M
-
-    for year in range(start_year, end_year + 1):
-        trip_file = Path(trip_data_folder) / f"{year}_merged.csv"
-        if not trip_file.exists():
-            print(f"❌ File not found: {trip_file}")
-            continue
-
-        print(f"\n📦 Processing trips for year: {year}")
-        trip_df = pd.read_csv(trip_file)
-        trip_df['starttime'] = pd.to_datetime(trip_df['starttime'], errors='coerce')
-        trip_df['stoptime'] = pd.to_datetime(trip_df['stoptime'], errors='coerce')
-
-        valid_coords_mask = trip_df['start station latitude'].notna() & trip_df['start station longitude'].notna()
-        trip_starts = trip_df[valid_coords_mask].copy()
-        trip_coords_rad = np.deg2rad(
-            np.c_[
-                trip_starts['start station latitude'].values,
-                trip_starts['start station longitude'].values
-            ]
-        )
-        tree = BallTree(trip_coords_rad, metric='haversine')
-
-        time_window_start = trip_df['starttime'].min() - timedelta(minutes=2)
-        time_window_end = trip_df['starttime'].max() + timedelta(minutes=2)
-        crash_df_chunk = crash_df[
-            (crash_df['CRASH_DATETIME'] >= time_window_start) &
-            (crash_df['CRASH_DATETIME'] <= time_window_end)
-        ].copy()
-
-        print(f"🚨 {len(crash_df_chunk)} crash records within trip time range.")
-
-        matched_trip_info = []
-
-        for _, crash_row in crash_df_chunk.iterrows():
-            crash_dt = crash_row['CRASH_DATETIME']
-            crash_lat, crash_lng = crash_row['LATITUDE'], crash_row['LONGITUDE']
-            crash_id = crash_row['COLLISION_ID']
-            crash_point_rad = np.deg2rad([[crash_lat, crash_lng]])
-
-            window_start = crash_dt - timedelta(minutes=max_time_diff)
-            window_end = crash_dt + timedelta(minutes=max_time_diff)
-
-            candidate_time_mask = (
-                (trip_starts['starttime'] >= window_start) & (trip_starts['starttime'] <= window_end)
-            ) | (
-                (trip_starts['stoptime'] >= window_start) & (trip_starts['stoptime'] <= window_end)
-            )
-            if not candidate_time_mask.any():
-                continue
-
-            candidates_idx = trip_starts[candidate_time_mask].index
-            sub_coords = trip_coords_rad[candidate_time_mask.values]
-            sub_tree = BallTree(sub_coords, metric='haversine')
-
-            nearby_idx = sub_tree.query_radius(crash_point_rad, r=max_distance_rad)[0]
-
-            for i in nearby_idx:
-                trip_idx = candidates_idx[i]
-                trip_row = trip_starts.loc[trip_idx]
-                dist_start = haversine(
-                    (trip_row['start station latitude'], trip_row['start station longitude']),
-                    (crash_lat, crash_lng), unit=Unit.METERS
-                )
-                dist_end = haversine(
-                    (trip_row['end station latitude'], trip_row['end station longitude']),
-                    (crash_lat, crash_lng), unit=Unit.METERS
-                ) if pd.notna(trip_row['end station latitude']) and pd.notna(trip_row['end station longitude']) else float('inf')
-
-                if dist_start <= max_distance_m and dist_end <= max_distance_m:
-                    match_type = 'both'
-                elif dist_start <= max_distance_m:
-                    match_type = 'start'
-                elif dist_end <= max_distance_m:
-                    match_type = 'end'
-                else:
-                    continue
-
-                matched_trip_info.append({
-                    'trip_idx': trip_idx,
-                    'crash_id': crash_id,
-                    'match_type': match_type,
-                    'dist_start_m': dist_start,
-                    'dist_end_m': dist_end,
-                    'CRASH_LATITUDE': crash_lat,
-                    'CRASH_LONGITUDE': crash_lng,
-                    'CRASH_DATETIME': crash_dt
-                })
-
-        # Add matched data to trip_df
-        trip_df['crash_match_type'] = None
-        trip_df['matched_crash_id'] = None
-        trip_df['dist_to_crash_start_m'] = None
-        trip_df['dist_to_crash_end_m'] = None
-        trip_df['CRASH_LATITUDE'] = None
-        trip_df['CRASH_LONGITUDE'] = None
-        trip_df['CRASH_DATETIME'] = None
-
-        matched_df = pd.DataFrame(matched_trip_info)
-        for _, row in matched_df.iterrows():
-            trip_df.at[row['trip_idx'], 'crash_match_type'] = row['match_type']
-            trip_df.at[row['trip_idx'], 'matched_crash_id'] = row['crash_id']
-            trip_df.at[row['trip_idx'], 'dist_to_crash_start_m'] = row['dist_start_m']
-            trip_df.at[row['trip_idx'], 'dist_to_crash_end_m'] = row['dist_end_m']
-            trip_df.at[row['trip_idx'], 'CRASH_LATITUDE'] = row['CRASH_LATITUDE']
-            trip_df.at[row['trip_idx'], 'CRASH_LONGITUDE'] = row['CRASH_LONGITUDE']
-            trip_df.at[row['trip_idx'], 'CRASH_DATETIME'] = row['CRASH_DATETIME']
-
-        matched_trips_df = trip_df[trip_df['matched_crash_id'].notna()].copy()
-        print(f"✅ Matched trips found: {len(matched_trips_df)}")
-
-        output_file = results_folder / f"matched_trips_{year}.csv"
-        matched_trips_df.to_csv(output_file, index=False)
-        print(f"💾 Saved to: {output_file}")
-
-        del trip_df, crash_df_chunk, matched_trip_info, matched_df, matched_trips_df, trip_starts
-        gc.collect()
