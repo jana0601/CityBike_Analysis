@@ -41,7 +41,9 @@ Aggregated multi-year plots and insights:
 - `monthly_crash_rate.png`  
 - `gender_distribution_all_years.png`  
 - `trip_duration_distribution.png`  
+- `forecast_vs_actual_2025_jan_sep_only.png`: Visual comparison of actual vs forecasted bike usage, bike involved crash for Jan–Sep 2025  
 - `matched_crashes_map_by_month_and_year.html` (interactive map)
+
 
 ### `results/matched_trips/`
 - `matched_trips_YYYY.csv`: Trip-level data linked to crashes  
