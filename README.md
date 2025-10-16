@@ -1,6 +1,6 @@
-# CityBike Analysis
+# CitiBike Analysis
 
-A comprehensive data analysis project exploring New York City's CityBike usage trends and crash associations from **2013 to 2025**. The project involves preprocessing, trip–crash data association, and visualization of rider behavior, station usage, and accident patterns etc.
+A comprehensive data analysis project exploring New York City's CitiBike usage trends and crash associations from **2013 to 2025**. The project involves preprocessing, trip–crash data association, and visualization of rider behavior, station usage, and accident patterns etc.
 
 ---
 
